@@ -2,6 +2,8 @@ name: Build dbt pipeline
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *' # Daily at 8:00 AM Philippine time
 
 permissions:
   contents: read
