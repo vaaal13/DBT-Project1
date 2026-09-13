@@ -1,129 +1,48 @@
 # Sales Analytics with dbt and Databricks
 
-A learning project that transforms synthetic retail sales data into reporting tables using dbt and Databricks.
+I built this project to practice taking raw sales data through bronze, silver, and gold layers in Databricks using dbt. It covers cleaning data, joining tables, updating existing records, and producing sales summaries.
 
-The pipeline follows a bronze, silver, and gold architecture, with SQL models for source ingestion, data cleaning, joins, incremental upserts, and aggregation.
+The project uses synthetic retail data. There are no real customer records.
 
-## Architecture
+## How the data flows
 
 ```text
-Uploaded CSVs → Source tables → Bronze → Silver → Gold
-                  default     bronze_layer  silver_layer  gold_layer
+Uploaded CSVs → Bronze → Silver → Gold
 ```
 
-All layers are stored in the Databricks catalog `dbt_source_1`.
+All tables live in the `dbt_source_1` catalog:
 
-| Layer | Purpose |
+| Schema | What it contains |
 |---|---|
-| Source — `default` | Tables created from uploaded CSV files |
-| Bronze — `bronze_layer` | Copies the source tables into dbt-managed models |
-| Silver — `silver_layer` | Cleans and joins sales, customers, products, and locations |
-| Gold — `gold_layer` | Summarizes sales by date, location, sales channel, and currency |
+| `default` | Raw tables uploaded from CSV files |
+| `bronze_layer` | Four dbt models that copy the raw tables |
+| `silver_layer` | Cleaned sales data joined with customer, product, and location details |
+| `gold_layer` | Sales summaries by date, location, sales channel, and currency |
 
-## Sample Data
+The starting dataset contains 1,000 sales lines across 500 orders, 100 customers, 30 products, and 10 locations. Transactions cover 2025 and use USD.
 
-The initial dataset contains fictional US retail transactions from 2025. All monetary amounts are in USD.
+## What the models do
 
-| Source table | Initial rows |
-|---|---:|
-| `fact_sales` | 1,000 sales lines across 500 orders |
-| `dim_customers` | 100 |
-| `dim_products` | 30 |
-| `dim_location` | 10 |
+**Bronze** reads the four source tables. The model named `dim_sales` reads `fact_sales`; despite the name, it contains sales transactions.
 
-The data is synthetic and contains no real customer records.
+**Silver** combines those models into `flat_schema`, with one row per `sale_id`. It trims whitespace, standardizes IDs and email addresses, handles blank descriptive fields, and casts dates and numeric values. It also calculates gross sales, net sales, cost of goods sold, and gross profit.
 
-## Transformations
+Silver uses an incremental merge on `sale_id`. New IDs are inserted, and existing IDs are updated. This gives Type 1-style overwrite behavior; it does not keep historical versions.
 
-### Bronze
+**Gold** builds `gold_dataset` from silver. It includes sales line counts, distinct order and customer counts, units sold, revenue, discounts, costs, profit, average order value, and gross margin percentage. This table is rebuilt on each run.
 
-Four models read the uploaded source tables:
+## Running locally
 
-- `dim_customers`
-- `dim_products`
-- `dim_location`
-- `dim_sales`
+The project uses dbt Fusion `2.0.0-preview.218` and a Databricks SQL warehouse.
 
-Despite its name, `dim_sales` contains sales transaction lines sourced from `fact_sales`.
+Before running:
 
-### Silver
+1. Load the source tables into `dbt_source_1.default`.
+2. Configure a profile named `dbt_project1` in `~/.dbt/profiles.yml`.
+3. Set its database to `dbt_source_1` and schema to `bronze_layer`.
+4. Use an account with access to the warehouse, source tables, and output schemas.
 
-`flat_schema` combines the four bronze models into one table with one row per `sale_id`.
-
-Transformations include:
-
-- Trimming whitespace and standardizing identifier casing.
-- Converting email addresses to lowercase.
-- Converting blank descriptive fields to null.
-- Casting dates, quantities, and monetary values.
-- Joining customer, product, and location attributes to sales.
-- Calculating gross sales, net sales, cost of goods sold, and gross profit.
-
-The model uses an incremental `merge` strategy keyed by `sale_id`. New sales are inserted, and matching rows are updated with current values.
-
-This provides Type 1-style overwrite behavior. Historical versions are not retained.
-
-### Gold
-
-`gold_dataset` aggregates the silver data by date, location, sales channel, and currency.
-
-Metrics include:
-
-- Sales line count
-- Distinct orders and customers
-- Units sold
-- Gross sales and discounts
-- Net sales
-- Cost of goods sold
-- Gross profit
-- Average order value
-- Gross margin percentage
-
-The gold table is rebuilt on each run to reflect the current silver data.
-
-## Project Structure
-
-```text
-dbtproject/
-├── .gitignore
-└── dbt-project1/
-    ├── dbt_project.yml
-    ├── packages.yml
-    ├── package-lock.yml
-    ├── README.md
-    ├── macros/
-    │   └── generate_schema_name.sql
-    └── models/
-        ├── source/
-        │   └── source.yml
-        ├── bronze/
-        │   ├── dim_customers.sql
-        │   ├── dim_products.sql
-        │   ├── dim_location.sql
-        │   └── dim_sales.sql
-        ├── silver/
-        │   └── flat_schema.sql
-        └── gold/
-            └── gold_dataset.sql
-```
-
-## Setup
-
-This project was developed using dbt Fusion `2.0.0-preview.218` and a Databricks SQL warehouse.
-
-To run it:
-
-1. Set up a Databricks workspace, SQL warehouse, and the required catalog.
-2. Load compatible source data into the four tables in `dbt_source_1.default`.
-3. Configure a local dbt connection profile named `dbt_project1` in `~/.dbt/profiles.yml`.
-4. Set the profile’s target catalog/database to `dbt_source_1` and target schema to `bronze_layer`.
-5. Authenticate and ensure your account can read the source tables and create the output schemas, tables, and views.
-
-Connection credentials are configured locally and should not be committed to Git.
-
-The CSV files are not currently included in this repository. The SQL models show the source columns required to reproduce the pipeline.
-
-## Running the Pipeline
+The sample CSV files are not currently included in this repository. Connection credentials are kept outside Git.
 
 From the repository root:
 
@@ -131,12 +50,12 @@ From the repository root:
 cd dbt-project1
 dbt deps
 dbt debug
-dbt run --select +gold_dataset
+dbt build
 ```
 
-The leading `+` includes the upstream bronze and silver models.
+`dbt build` runs the models and their tests in dependency order.
 
-To inspect the final result in Databricks:
+To view the gold output:
 
 ```sql
 SELECT *
@@ -144,22 +63,56 @@ FROM dbt_source_1.gold_layer.gold_dataset
 ORDER BY sale_date DESC, net_sales_amount DESC;
 ```
 
-## Current Limitations
+## Data checks
 
-- CSV ingestion is manual.
-- Runs are triggered manually; scheduling and CI/CD are not configured.
-- Silver reads all current bronze rows on each run because the sample data has no reliable update timestamp.
-- Source deletions are not automatically removed from the incremental silver table.
-- Dimension changes update existing sales rows with current attributes; attributes as they existed at the original sale date are not preserved.
-- Sales IDs must be unique and non-null, and dimension join keys must be unique. Automated data tests are not yet implemented.
-- Schema naming uses fixed `silver_layer` and `gold_layer` destinations for this learning environment.
+The project now has 15 data tests:
 
-Distinct customer counts should not be summed across reporting groups. Overall average order value and margin should be recalculated from their underlying totals.
+| Checks | Tests |
+|---|---:|
+| Bronze customer, product, and location IDs are unique and non-null | 6 |
+| Silver sales IDs are unique and non-null | 2 |
+| Silver customer, product, and location IDs are non-null and exist in their bronze dimensions | 6 |
+| Net sales totals match across bronze, silver, and gold by currency | 1 |
 
-## Planned Improvements
+All 15 have passed locally across the test runs.
 
-- Add dbt tests for keys, relationships, and revenue reconciliation.
-- Automate pipeline execution with GitHub Actions or Databricks Jobs.
-- Configure authentication for unattended runs.
-- Explore SCD Type 2 snapshots to retain changes over time.
-- Build dashboards from the gold layer.
+The reconciliation test also checks for missing revenue inputs and currencies missing from a layer. Matching totals are useful, but they do not prove every individual transaction is correct.
+
+To run just the tests against existing tables:
+
+```bash
+dbt test
+```
+
+## GitHub Actions
+
+A manual workflow is defined in `.github/workflows/dbt.yml`. It installs the same Fusion version used locally, creates a connection profile on the GitHub runner, installs project dependencies, and runs `dbt build`.
+
+It uses these repository settings:
+
+| Setting | Type |
+|---|---|
+| `DATABRICKS_TOKEN` | Secret |
+| `DATABRICKS_HOST` | Variable |
+| `DATABRICKS_HTTP_PATH` | Variable |
+
+After the workflow is pushed to the default branch, it can be started from **Actions → Build dbt pipeline → Run workflow**.
+
+The workflow updates the same Databricks tables used locally. Its first GitHub run is still pending. There is no schedule or automatic push trigger yet.
+
+## Current limitations
+
+- CSV uploads are manual.
+- Silver reads all bronze rows on each run because the source data has no reliable update timestamp.
+- Source deletions are not automatically removed from silver.
+- Changes to customer, product, or location details overwrite the attributes on existing silver sales rows. SCD Type 2 history is not implemented.
+- Output schemas are fixed for this learning environment.
+
+Distinct customer and order counts should not be added across groups where the same customer or order can appear more than once. Overall averages and margins should be calculated from the underlying totals.
+
+## Next steps
+
+- Verify the GitHub Actions workflow and add a schedule.
+- Explore SCD Type 2 snapshots.
+- Automate raw data ingestion.
+- Build a dashboard using the gold tables.
