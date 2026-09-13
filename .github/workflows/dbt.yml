@@ -1,0 +1,63 @@
+name: Build dbt pipeline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dbt-databricks-pipeline
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: dbt-project1
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Install dbt Fusion
+        run: |
+          curl -fsSL https://public.cdn.getdbt.com/fs/install/install.sh \
+            -o /tmp/install-dbt.sh
+          sh /tmp/install-dbt.sh \
+            --version 2.0.0-preview.218 \
+            --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Create connection profile
+        run: |
+          mkdir -p "$HOME/.dbt"
+          cat > "$HOME/.dbt/profiles.yml" <<'YAML'
+          dbt_project1:
+            target: dev
+            outputs:
+              dev:
+                type: databricks
+                database: dbt_source_1
+                schema: bronze_layer
+                host: "{{ env_var('DBT_HOST') }}"
+                http_path: "{{ env_var('DBT_HTTP_PATH') }}"
+                token: "{{ env_var('DBT_ENV_SECRET_TOKEN') }}"
+                threads: 4
+          YAML
+
+      - name: Install project dependencies
+        run: |
+          dbt --version
+          dbt deps
+
+      - name: Build models and run tests
+        env:
+          DBT_HOST: ${{ vars.DATABRICKS_HOST }}
+          DBT_HTTP_PATH: ${{ vars.DATABRICKS_HTTP_PATH }}
+          DBT_ENV_SECRET_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: dbt build
