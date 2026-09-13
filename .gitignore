@@ -1,0 +1,3 @@
+# Ignore logs anywhere in this repository
+logs/
+*.log
